@@ -11,13 +11,15 @@
 
 - MJSXJ06CM 我没有找到串口，使用spi编程器将flash拷贝出后添加了telnetd
 
-- 音频格式g711，期待大佬分析(应该是两路音频，共640字节，只发320字节，应该是没有降噪)
+- 音频格式g711，期待大佬分析(fixed)
 
 视频格式：前96字节为固定头 第81个字节起4个字节为视频流（音频流）长度。
 
 使用方法：
 
 1. 修改Makefile配置交叉编译
+
+ulibc使用 `arm-sigmastar-linux-uclibcgnueabihf-9.1.0`
 
 	`cd mini_telnetd; make`
 
