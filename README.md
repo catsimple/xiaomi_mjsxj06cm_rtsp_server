@@ -21,9 +21,9 @@
 
 ulibc使用 `arm-sigmastar-linux-uclibcgnueabihf-9.1.0`
 
-	`cd mini_telnetd; make`
+	cd mini_telnetd; make
 
-	`cd rtsp_demo; make`
+	cd rtsp_demo; make
 2. 参考[@SungurLabs](https://github.com/SungurLabs/sungurlabs.github.io/blob/6043366d497943e0a246a6a420ba8fb2adfcef31/_posts/2021-07-14-Xiaomi-Smart-Camera---Recovering-Firmware-and-Backdooring.md) 修改/etc/init.d/rcS, 在最后添加
 
 	`/usr/bin/telnetd &`
