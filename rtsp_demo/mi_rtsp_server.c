@@ -1,18 +1,7 @@
 /********************************************************************
 * file: mi_rtsp_server.c               date: 六 2024-08-03 11:00:16 *
 *                                                                   *
-* Description:                                                      *
-*                                                                   *
-*                                                                   *
-* Maintainer:  (yxl)         <852041654@qq.com>                     *
-*                                                                   *
-* This file is free software;                                       *
-*   you are free to modify and/or redistribute it                   *
-*   under the terms of the GNU General Public Licence (GPL).        *
-*                                                                   *
-* Last modified:                                                    *
-*                                                                   *
-* No warranty, no liability, use this at your own risk!             *
+* Description: Fixed Audio (PCM16->G711A + Downsample)              *
 ********************************************************************/
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +17,7 @@ extern "C" {
 #include <signal.h>
 #include <fcntl.h>
 #include <stdbool.h>
+#include <stdint.h> // 引入 int16_t
 #include "rtsp_demo.h"
 
 #define likely(x)       __builtin_expect(!!(x), 1)
@@ -35,6 +25,51 @@ extern "C" {
 
 #define MAX_BUFFER_SIZE 128
 #define EPOLL_TIMEOUT 60000 // milliseconds
+
+// ==========================================
+// [新增] G.711 A-law 编码表与转换函数
+// ==========================================
+unsigned char linear2alaw(int16_t pcm_val)
+{
+	int mask;
+	int seg;
+	unsigned char aval;
+
+	pcm_val = pcm_val >> 3;
+
+	if (pcm_val >= 0) {
+		mask = 0xD5;
+	} else {
+		mask = 0x55;
+		pcm_val = -pcm_val - 1;
+	}
+
+	if (pcm_val < 32) {
+		seg = 0;
+	} else if (pcm_val < 64) {
+		seg = 1;
+	} else if (pcm_val < 128) {
+		seg = 2;
+	} else if (pcm_val < 256) {
+		seg = 3;
+	} else if (pcm_val < 512) {
+		seg = 4;
+	} else if (pcm_val < 1024) {
+		seg = 5;
+	} else if (pcm_val < 2048) {
+		seg = 6;
+	} else {
+		seg = 7;
+	}
+
+	if (seg >= 8)
+		return (unsigned char) (0x7F ^ mask);
+	else {
+		aval = (unsigned char) (seg << 4) | ((pcm_val >> (seg ? seg - 1 : 0)) & 0x0F);
+		return (aval ^ mask);
+	}
+}
+// ==========================================
 
 typedef int(*set_frame)(rtsp_session_handle session, const uint8_t *frame, int len, uint64_t ts);
 
@@ -101,6 +136,9 @@ int main(int argc, char *argv[]) {
 	struct iovec iov[2];
 	char iovPart1[4];
 	char iovPart2[MAX_BUFFER_SIZE];
+	
+	// [新增] 音频编码缓冲区
+	unsigned char audio_encode_buf[1024];
 
 	iov[0].iov_base = iovPart1;
 	iov[0].iov_len = sizeof(iovPart1);
@@ -154,9 +192,10 @@ int main(int argc, char *argv[]) {
 		}
 		rtsp_set_video(p->session, RTSP_CODEC_ID_VIDEO_H265, NULL, 0);
 		rtsp_sync_video_ts(p->session, rtsp_get_reltime(), rtsp_get_ntptime());
+		
+		// 音频设置为 G711A (PCMA), 8000Hz
 		rtsp_set_audio(p->session, RTSP_CODEC_ID_AUDIO_G711A, NULL, 0);
 		rtsp_sync_audio_ts(p->session, rtsp_get_reltime(), rtsp_get_ntptime());
-		//rtsp_set_auth(p->session, RTSP_AUTH_TYPE_BASIC, "admin", "123456");
 	}
 	mi_info[2].session = mi_info[0].session;
 
@@ -190,18 +229,31 @@ int main(int argc, char *argv[]) {
 				continue;
 			}
 
-#if 0
-			printf("type: %s, msglen: 0x%x\n", p->stream_path, msg_len);
-			for (int i = 0; i < 1024; i++) {
-				printf("%02x ", map_addr[i]);
-			}
-			printf("\n====================\n");
-#endif
 			msg_len = ((unsigned int *)(map_addr + 64))[p->msg_offset];
+			
+			// =======================================================
+			// [核心修改] 音频处理逻辑
+			// =======================================================
 			if (!p->stream_path) { /* audio only send main */
-				(p->callback)(p->session, (const uint8_t *)(map_addr+96 +320), msg_len/2, ts);
+				// 1. 获取原始 PCM 16bit 数据指针
+				int16_t *pcm_src = (int16_t *)(map_addr + 96);
+				
+				// 2. 计算采样点数 (通常 msg_len 为 640 字节 = 320 个采样点)
+				int src_samples = msg_len / 2;
+				
+				// 3. 降采样 + 编码 (16k PCM -> 8k G.711A)
+				// 每次循环步进为 2 (i+=2)，实现从 16k 降到 8k
+				int encoded_len = 0;
+				for (int j = 0; j < src_samples && encoded_len < sizeof(audio_encode_buf); j += 2) {
+					audio_encode_buf[encoded_len++] = linear2alaw(pcm_src[j]);
+				}
+				
+				// 4. 发送编码后的数据
+				(p->callback)(p->session, audio_encode_buf, encoded_len, ts);
 			}
+			// =======================================================
 			else {
+				// 视频流保持不变
 				(p->callback)(p->session, (const uint8_t *)(map_addr+96), msg_len, ts);
 			}
 
@@ -241,11 +293,6 @@ int main(int argc, char *argv[]) {
 	return 0;
 }
 
-
-
-
-
 #ifdef __cplusplus
 };
 #endif
-/**************** End Of File: mi_rtsp_server.c *****************/
